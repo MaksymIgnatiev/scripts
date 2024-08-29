@@ -6,7 +6,7 @@ command_exists() {
 }
 
 # Check for required dependencies
-REQUIRED_TOOLS=("yt-dlp" "ffmpeg" "jq")
+REQUIRED_TOOLS=("yt-dlp" "ffmpeg")
 MISSING_TOOLS=()
 
 for TOOL in "${REQUIRED_TOOLS[@]}"; do
