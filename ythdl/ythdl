@@ -1,0 +1,217 @@
+#!/bin/bash
+
+# Function to check if a command exists
+command_exists() {
+	command -v "$1" >/dev/null 2>&1
+}
+
+# Check for required dependencies
+REQUIRED_TOOLS=("yt-dlp" "ffmpeg" "jq")
+MISSING_TOOLS=()
+
+for TOOL in "${REQUIRED_TOOLS[@]}"; do
+	if ! command_exists "$TOOL"; then
+		MISSING_TOOLS+=("$TOOL")
+	fi
+done
+
+if [ ${#MISSING_TOOLS[@]} -gt 0 ]; then
+	echo "Error: The following required tools are missing:"
+	for TOOL in "${MISSING_TOOLS[@]}"; do
+		echo -e "  - \033[32m$TOOL\033[0m"
+	done
+	echo "Please install the missing tools and try again."
+	exit 1
+fi
+
+print_help() {
+	echo -e "Usage: \033[32m$0\033[0m [\033[32mOPTIONS ...\033[0m] <\033[32mYouTube URL\033[0m> [\033[32mOutput Path\033[0m]\n"
+	echo -e "\033[32mOPTIONS\033[0m:"
+	echo    "    -h, --help         Display this message"
+	echo    "    -q, --quiet        Download without any output"
+	echo -e "    -f, --force        Overwrite the existed file (if it was existed)\n"
+	echo -e "\033[32mYouTube URL\033[0m: URL to the youtube watch source (ex. https://www.youtube.com/watch?v=dQw4w9WgXcQ)"
+	echo -e "\033[32mOutput Path\033[0m: path to the \033[32mfile\033[0m or \033[32mdirectory\033[0m. If \033[32mdirectory\033[0m - then will be created \`.mp4\` file with the title of the video"
+}
+
+# Check if at least one argument is provided
+if [ $# -lt 1 ]; then
+	print_help
+	exit 1
+fi
+
+# Initialize variables
+FORCE=false
+QUIET=false
+POSITIONAL_ARGS=()
+
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+	case $1 in
+		-h|--help)
+			print_help
+			exit 1
+			;;
+		-f|--force)
+			FORCE=true
+			shift
+			;;
+		-q|--quiet)
+			QUIET=true
+			shift
+			;;
+		-*|--*) # Unknown option
+			if [ "$QUIET" = false ]; then
+				echo "Unknown option $1"
+			fi
+			exit 1
+			;;
+		*) # Positional arguments
+			POSITIONAL_ARGS+=("$1")
+			shift
+			;;
+	esac
+done
+
+# Restore positional parameters
+set -- "${POSITIONAL_ARGS[@]}"
+
+# Assign variables from arguments
+YOUTUBE_URL="$1"
+OUTPUT_DIR="$2"
+
+# Check if the provided URL is a valid YouTube link
+if ! [[ "$YOUTUBE_URL" =~ ^https?://(www\.)?(youtube\.com|youtu\.be)/ ]]; then
+	if [ "$QUIET" = false ]; then
+		echo "Error: The provided URL is not a valid YouTube link."
+	fi
+	exit 1
+fi
+
+
+if [ "$QUIET" = false ]; then
+	echo "Checking video availability"
+fi
+
+# Check if the URL corresponds to a valid YouTube resource
+yt-dlp --simulate "$YOUTUBE_URL" > /dev/null 2>&1
+
+if [ $? -ne 0 ]; then
+	if [ "$QUIET" = false ]; then
+		echo "Error: The provided URL does not point to a valid YouTube video."
+	fi
+	exit 1
+fi
+
+if [ "$QUIET" = false ]; then
+	echo "Searching for video and audio channels"
+fi
+
+FORMATS=$(yt-dlp -F "$YOUTUBE_URL" 2>/dev/null)
+
+HAS_AUDIO=$(echo "$FORMATS" | grep -E 'audio|m4a|webm')
+HAS_VIDEO=$(echo "$FORMATS" | grep -E 'video|mp4|webm')
+
+if [ "$QUIET" = false ]; then
+	if [ -z "$HAS_AUDIO" ] || [ -z "$HAS_VIDEO" ]; then
+		echo "\033[33mWarning\033[0m: The video may not contain audio and/or video streams."
+		if [ -z "$HAS_AUDIO" ]; then
+			echo "  - No audio streams found."
+		fi
+		if [ -z "$HAS_VIDEO" ]; then
+			echo "  - No video streams found."
+		fi
+	fi
+fi
+
+# Create a temporary directory for downloading files
+TEMP_DIR=$(mktemp -d)
+
+# Function to clean up temporary directory on exit
+cleanup() {
+	rm -rf "$TEMP_DIR"
+}
+trap cleanup EXIT
+
+# Extract video title for naming
+VIDEO_TITLE=$(yt-dlp --get-title "$YOUTUBE_URL" 2>/dev/null)
+
+if [ $? -ne 0 ]; then
+	if [ "$QUIET" = false ]; then
+		echo "Error: Could not retrieve video title. Please check the URL and try again."
+	fi
+	exit 1
+fi
+
+# Check if the OUTPUT_DIR is not empty
+if [ -n "$OUTPUT_DIR" ]; then
+	if [ -d "$OUTPUT_DIR" ]; then
+		# If it's a directory, use it with the video title
+		OUTPUT_PATH="$OUTPUT_DIR/$VIDEO_TITLE.mp4"
+	else
+		# It's a file path; check if it has an extension
+		if [[ "$OUTPUT_DIR" != *.* ]]; then
+			# Add the .mp4 extension if there is no extension
+			OUTPUT_PATH="$OUTPUT_DIR.mp4"
+		else
+			# Use the provided file path directly
+			OUTPUT_PATH="$OUTPUT_DIR"
+		fi
+	fi
+else
+	# Default case: use the current directory and video title
+	OUTPUT_PATH="./$VIDEO_TITLE.mp4"
+fi
+
+# Check if a file with the same name already exists and handle force flag
+if [ -f "$OUTPUT_PATH" ] && [ "$FORCE" = false ]; then
+	if [ "$QUIET" = false ]; then
+		echo -e "\033[33mWarning\033[0m: A file with the name '\033[32m$OUTPUT_PATH\033[0m' already exists. Use \033[32m-f\033[0m or \033[32m--force\033[0m to overwrite."
+	fi
+	exit 1
+fi
+
+if [ "$QUIET" = false ]; then
+	echo "Dowloading"
+fi
+
+# Download video and extract metadata
+yt-dlp -q -f 'ba,bv/b' --output "$TEMP_DIR/%(title)s.%(ext)s"  "$YOUTUBE_URL"
+
+# Find the downloaded files
+FILES=("$TEMP_DIR"/*)
+VIDEO_FILE=""
+AUDIO_FILE=""
+
+for FILE in "${FILES[@]}"; do
+	if [ -f "$FILE" ]; then
+		VIDEO_STREAM_COUNT=$(ffprobe -v error -select_streams v -show_entries stream=index -of csv=p=0 "$FILE" | wc -l)
+		AUDIO_STREAM_COUNT=$(ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 "$FILE" | wc -l)
+
+		# Determine which file is video and which is audio
+		if [[ "$VIDEO_STREAM_COUNT" -gt 0 ]]; then
+			VIDEO_FILE="$FILE"
+		elif [[ "$AUDIO_STREAM_COUNT" -gt 0 ]]; then
+			AUDIO_FILE="$FILE"
+		fi
+	fi
+done
+
+# Check if video and audio files exist
+if [ ! -f "$VIDEO_FILE" ] || [ ! -f "$AUDIO_FILE" ]; then
+	if [ "$QUIET" = false ]; then
+		echo "Error: Could not find the video and/or audio files. Please check the URL and try again."
+	fi
+	exit 1
+fi
+
+if [ "$QUIET" = false ]; then
+	echo "Merging video and audio chanels"
+fi
+
+# Merge the video and audio into one .mp4 file using ffmpeg
+ffmpeg -y -i "$VIDEO_FILE" -i "$AUDIO_FILE" -c:v copy -c:a aac "$OUTPUT_PATH" >/dev/null 2>&1
+
+if [ "$QUIET" = false ]; then
+	echo -e "Video saved to '\033[32m$OUTPUT_PATH\033[0m'"
+fi
