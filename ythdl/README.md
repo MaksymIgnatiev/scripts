@@ -9,7 +9,7 @@ Examples of usage:
 ythdl https://www.youtube.com/watch?v=dQw4w9WgXcQ
 
 # Download the video and safe it as a file with a given name
-ythdl https://www.youtube.com/watch?v=dQw4w9WgXcQ someCoolVideo.mp 
+ythdl https://www.youtube.com/watch?v=dQw4w9WgXcQ someCoolVideo.mp4
 
 # Download the video and safe it to the given directory as a `directory/video_title.mp4` file  
 ythdl https://www.youtube.com/watch?v=dQw4w9WgXcQ ~/Downloads/videos
