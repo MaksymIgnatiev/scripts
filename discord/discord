@@ -1,0 +1,28 @@
+#!/bin/sh
+
+DISCORD_BIN="/usr/bin/discord"
+BUILD_INFO="/opt/discord/resources/build_info.json"
+BACKUP_DIR="$HOME/Documents/discord/"
+BACKUP_FILE="${BACKUP_DIR}versions.json"
+
+[ -d "$BACKUP_DIR" ] || mkdir "$BACKUP_DIR"
+[ -f "$BACKUP_FILE" ] || echo '{"current": "", "previous": []}' > "$BACKUP_FILE"
+
+LATEST_VERSION=$(sudo pacman -Syi discord | awk '/^Version/ {print $3}' | cut -d'-' -f1)
+
+CURRENT_VERSION=$(jq -r '.version' "$BUILD_INFO" 2>/dev/null)
+[ -z "$CURRENT_VERSION" ] && { echo "Failed to read current version."; exit 1; }
+
+if [ "$CURRENT_VERSION" != "$LATEST_VERSION" ]; then
+    echo "Updating version from $CURRENT_VERSION to $LATEST_VERSION..."
+
+    jq --arg new "$LATEST_VERSION" --arg previous "$CURRENT_VERSION" '.previous += [$previous] | .current = $new' "$BACKUP_FILE" > "$BACKUP_FILE.tmp" && mv "$BACKUP_FILE.tmp" "$BACKUP_FILE"
+
+    jq --arg new "$LATEST_VERSION" '.version = $new' "$BUILD_INFO" | sudo tee "$BUILD_INFO.tmp" >/dev/null 2>&1 && sudo mv "$BUILD_INFO.tmp" "$BUILD_INFO" && echo "Updated successfully." && notify-send -t 5000 "Discord" "Discord updated:\n$CURRENT_VERSION -> $LATEST_VERSION"
+else
+    echo "No update needed. Current version: $CURRENT_VERSION"
+fi
+
+nohup "$DISCORD_BIN" >/dev/null 2>&1 &
+disown >/dev/null 2>&1
+true
